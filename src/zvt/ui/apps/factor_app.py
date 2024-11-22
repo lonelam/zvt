@@ -2,7 +2,7 @@
 from typing import List
 
 import dash_daq as daq
-from dash import dash
+from dash import dash, callback
 from dash import dcc
 from dash import html
 from dash.dependencies import Input, Output, State
@@ -40,7 +40,6 @@ def order_type_color(order_type):
     else:
         return "#00da3c"
 
-
 def load_traders():
     global traders
     global trader_names
@@ -73,6 +72,7 @@ def factor_layout():
                             html.Div(
                                 className="padding-top-bot",
                                 children=[
+                                    html.Button("Reload Traders", id="reload-traders-button", n_clicks=0),
                                     html.H6("select trader:"),
                                     dcc.Dropdown(
                                         id="trader-selector",
@@ -195,6 +195,16 @@ def factor_layout():
     )
 
     return layout
+
+
+
+@zvt_app.callback(
+    [Output("trader-selector", "options")],
+    [Input("reload-traders-button", "n_clicks")]
+)
+def reload_traders(n_clicks):
+    load_traders()
+    return [[{"label": item, "value": i} for i, item in enumerate(trader_names)]]
 
 
 @zvt_app.callback(

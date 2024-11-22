@@ -546,6 +546,7 @@ class StockTrader(Trader):
         adjust_type: AdjustType = AdjustType.hfq,
         profit_threshold=(3, -0.3),
         keep_history=False,
+        pre_load_days=365,
     ) -> None:
         super().__init__(
             entity_ids,
@@ -563,6 +564,7 @@ class StockTrader(Trader):
             adjust_type,
             profit_threshold,
             keep_history,
+            pre_load_days,
         )
 
 
