@@ -59,7 +59,7 @@ def get_cn_index_stock(code, timestamp, name=None):
                 "stock_code": stock_code,
                 "stock_name": stock_name,
                 "proportion": value_to_pct(result["weight"], 0),
-                "market_cap": value_multiply(result["freeMarketValue"], 100000000, 0),
+                "market_cap": value_multiply(result["totalMarketValue"], 100000000, 0),
             }
         )
     if the_list:
