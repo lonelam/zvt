@@ -1,25 +1,22 @@
 # -*- coding: utf-8 -*-
 import pandas as pd
-
-from zvt.api.kdata import get_kdata_schema, get_kdata
+from zvt.api.kdata import get_kdata_schema
 from zvt.broker.qmt import qmt_quote
-from zvt.contract import IntervalLevel, AdjustType
-from zvt.contract.api import df_to_db, get_db_session, get_entities
+from zvt.consts import IMPORTANT_INDEX
+from zvt.contract import IntervalLevel
+from zvt.contract.api import df_to_db
 from zvt.contract.recorder import FixedCycleDataRecorder
 from zvt.contract.utils import evaluate_size_from_timestamp
-from zvt.domain import (
-    Stock,
-    StockKdataCommon,
-)
+from zvt.domain import Index, Index1mKdata
 from zvt.utils.pd_utils import pd_is_not_null
-from zvt.utils.time_utils import current_date, to_time_str, TIME_FORMAT_DAY, TIME_FORMAT_MINUTE, now_time_str
+from zvt.utils.time_utils import TIME_FORMAT_DAY, TIME_FORMAT_MINUTE, current_date, to_time_str
 
 
-class BaseQmtKdataRecorder(FixedCycleDataRecorder):
-    default_size = 50000
-    entity_provider: str = "qmt"
-
+class QmtIndexRecorder(FixedCycleDataRecorder):
     provider = "qmt"
+    data_schema = Index1mKdata
+    entity_provider = "em"
+    entity_schema = Index
     download_history_data = False
 
     def __init__(
@@ -41,16 +38,14 @@ class BaseQmtKdataRecorder(FixedCycleDataRecorder):
             level=IntervalLevel.LEVEL_1DAY,
             kdata_use_begin_time=False,
             one_day_trading_minutes=24 * 60,
-            adjust_type=AdjustType.qfq,
             return_unfinished=False,
             download_history_data=False
     ) -> None:
         level = IntervalLevel(level)
-        self.adjust_type = AdjustType(adjust_type)
-        self.entity_type = self.entity_schema.__name__.lower()
+        self.entity_type = "index"
         self.download_history_data = download_history_data
 
-        self.data_schema = get_kdata_schema(entity_type=self.entity_type, level=level, adjust_type=self.adjust_type)
+        self.data_schema = get_kdata_schema(entity_type=self.entity_type, level=level, adjust_type=None)
 
         super().__init__(
             force_update,
@@ -74,73 +69,9 @@ class BaseQmtKdataRecorder(FixedCycleDataRecorder):
         )
         self.one_day_trading_minutes = 240
 
-    def init_entities(self):
-        """
-        init the entities which we would record data for
-
-        """
-        if self.entity_provider == self.provider and self.entity_schema == self.data_schema:
-            self.entity_session = self.session
-        else:
-            self.entity_session = get_db_session(provider=self.entity_provider, data_schema=self.entity_schema)
-
-        if self.day_data:
-            df = self.data_schema.query_data(
-                start_timestamp=now_time_str(), columns=["entity_id", "timestamp"], provider=self.provider
-            )
-            if pd_is_not_null(df):
-                entity_ids = df["entity_id"].tolist()
-                self.logger.info(f"ignore entity_ids:{entity_ids}")
-                if self.entity_filters:
-                    self.entity_filters.append(self.entity_schema.entity_id.notin_(entity_ids))
-                else:
-                    self.entity_filters = [self.entity_schema.entity_id.notin_(entity_ids)]
-
-        #: init the entity list
-        self.entities = get_entities(
-            session=self.entity_session,
-            entity_schema=self.entity_schema,
-            exchanges=self.exchanges,
-            entity_ids=self.entity_ids,
-            codes=self.codes,
-            return_type="domain",
-            provider=self.entity_provider,
-            filters=self.entity_filters,
-        )
-
     def record(self, entity, start, end, size, timestamps):
         if start and (self.level == IntervalLevel.LEVEL_1DAY):
             start = start.date()
-
-        # 判断是否需要重新计算之前保存的前复权数据
-        if start and (self.adjust_type == AdjustType.qfq):
-            check_df = qmt_quote.get_kdata(
-                entity_id=entity.id,
-                start_timestamp=start,
-                end_timestamp=start,
-                adjust_type=self.adjust_type,
-                level=self.level,
-                download_history=self.download_history_data,
-            )
-            if pd_is_not_null(check_df):
-                current_df = get_kdata(
-                    entity_id=entity.id,
-                    provider=self.provider,
-                    start_timestamp=start,
-                    end_timestamp=start,
-                    limit=1,
-                    level=self.level,
-                    adjust_type=self.adjust_type,
-                )
-                if pd_is_not_null(current_df):
-                    old = current_df.iloc[0, :]["close"]
-                    new = check_df["close"][0]
-                    # 相同时间的close不同，表明前复权需要重新计算
-                    if round(old, 2) != round(new, 2):
-                        # 删掉重新获取
-                        self.session.query(self.data_schema).filter(self.data_schema.entity_id == entity.id).delete()
-                        start = "2005-01-01"
-
         if not start:
             start = "2005-01-01"
         if not end:
@@ -154,7 +85,7 @@ class BaseQmtKdataRecorder(FixedCycleDataRecorder):
             entity_id=entity.id,
             start_timestamp=start,
             end_timestamp=end,
-            adjust_type=self.adjust_type,
+            adjust_type=None,
             level=self.level,
             download_history=self.download_history_data,
         )
@@ -208,15 +139,35 @@ class BaseQmtKdataRecorder(FixedCycleDataRecorder):
 
         return start_timestamp, end_timestamp, size, timestamps
 
-
-class QMTStockKdataRecorder(BaseQmtKdataRecorder):
-    entity_schema = Stock
-    data_schema = StockKdataCommon
+    # # 中证，上海
+    # def record_cs_index(self, index_type):
+    #     df = cs_index_api.get_cs_index(index_type=index_type)
+    #     df_to_db(data_schema=self.data_schema, df=df, provider=self.provider, force_update=True)
+    #     self.logger.info(f"finish record {index_type} index")
+    #
+    # # 国证，深圳
+    # def record_cn_index(self, index_type):
+    #     if index_type == "cni":
+    #         category_map_url = cn_index_api.cni_category_map_url
+    #     elif index_type == "sz":
+    #         category_map_url = cn_index_api.sz_category_map_url
+    #     else:
+    #         self.logger.error(f"not support index_type: {index_type}")
+    #         assert False
+    #
+    #     for category, _ in category_map_url.items():
+    #         df = cn_index_api.get_cn_index(index_type=index_type, category=category)
+    #         df_to_db(data_schema=self.data_schema, df=df, provider=self.provider, force_update=True)
+    #         self.logger.info(f"finish record {index_type} index:{category.value}")
 
 
 if __name__ == "__main__":
-    # Stock.record_data(provider="qmt")
-    QMTStockKdataRecorder(entity_id="stock_sz_002231", adjust_type=AdjustType.qfq, level=IntervalLevel.LEVEL_1MIN).run()
+    # init_log('china_stock_category.log')
+    start_timestamp = pd.Timestamp("2024-12-01")
+    end_timestamp = pd.Timestamp("2024-12-03")
+    QmtIndexRecorder(codes=IMPORTANT_INDEX, level=IntervalLevel.LEVEL_1MIN, sleeping_time=0,
+                     start_timestamp=start_timestamp, end_timestamp=end_timestamp,
+                     download_history_data=True).run()
 
 # the __all__ is generated
-__all__ = ["BaseQmtKdataRecorder", "QMTStockKdataRecorder"]
+__all__ = ["QmtIndexRecorder"]
